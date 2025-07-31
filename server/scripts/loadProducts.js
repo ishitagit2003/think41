@@ -1,112 +1,64 @@
-// server/scripts/loadProducts.js
 const fs = require('fs');
 const path = require('path');
-const { parse } = require('csv-parse');
-const mysql = require('mysql2/promise');
-const cfg = require('../db/config');
+const mysql = require('mysql2');
+const dotenv = require('dotenv');
+const csv = require('csv-parser');
 
-const CSV_PATH = process.env.CSV_PATH || 'C:/full/path/to/products.csv';
+dotenv.config(); // Load .env
 
-// EXACT header order from your CSV (adjust if needed):
-const fields = [
-  'id','cost','category','name','brand','retail_price','department','sku','distribution_center_id'
-];
+const dbConfig = require('../db/config');
+const connection = mysql.createConnection(dbConfig);
 
-function toNumber(v) {
-  if (v == null) return null;
-  const s = String(v).replace(/,/g, '').trim();   // “1,299.00” -> “1299.00”
-  if (s === '') return null;
-  const n = Number(s);
-  return Number.isFinite(n) ? n : null;
-}
+// Connect to MySQL
+connection.connect(err => {
+  if (err) {
+    console.error('❌ MySQL connection failed:', err.message);
+    return;
+  }
+  console.log('✅ MySQL connected');
 
-(async () => {
-  const conn = await mysql.createConnection({
-    host: cfg.host,
-    user: cfg.user,
-    password: cfg.password,
-    database: cfg.database,
-    multipleStatements: false,
-    // enable LOCAL INFILE if you later switch to LOAD DATA
-    // flags: ['+LOCAL_FILES'],
-  });
+  const results = [];
+  const filePath = path.join(__dirname, '../../products.csv');
 
-  // Verify table exists (safety)
-  await conn.execute(`CREATE TABLE IF NOT EXISTS products (
-    product_pk INT AUTO_INCREMENT PRIMARY KEY,
-    id VARCHAR(64),
-    name VARCHAR(255),
-    brand VARCHAR(255),
-    category VARCHAR(255),
-    department VARCHAR(255),
-    sku VARCHAR(128),
-    cost DECIMAL(10,2),
-    retail_price DECIMAL(10,2),
-    distribution_center_id VARCHAR(64)
-  )`);
+  fs.createReadStream(filePath)
+    .pipe(csv())
+    .on('data', (row) => {
+      results.push([
+        Number(row.id),
+        Number(row.cost),
+        row.category,
+        row.name,
+        row.brand,
+        Number(row.retail_price),
+        row.department,
+        row.sku,
+        row.distribution_center_id
+      ]);
+    })
+    .on('end', () => {
+      if (results.length === 0) {
+        console.log('❗ No data found in CSV');
+        connection.end();
+        return;
+      }
 
-  const parser = fs.createReadStream(CSV_PATH).pipe(parse({
-    columns: true,            // use header row
-    skip_empty_lines: true,
-    relax_column_count: true
-  }));
+      const insertQuery = `
+        INSERT INTO products
+        (id, cost, category, name, brand, retail_price, department, sku, distribution_center_id)
+        VALUES ?
+      `;
 
-  const insertSQL = `
-    INSERT INTO products (${fields.join(',')})
-    VALUES (${fields.map(() => '?').join(',')})
-  `;
-
-  const batch = [];
-  const batchSize = 1000;
-  let total = 0;
-
-  for await (const row of parser) {
-    // Map row to expected field order
-    const rec = fields.map((k) => {
-      if (k === 'cost' || k === 'retail_price') return toNumber(row[k]);
-      const v = row[k];
-      return v === '' ? null : v;
+      connection.query(insertQuery, [results], (err, result) => {
+        if (err) {
+          console.error('❌ Error inserting products:', err.message);
+        } else {
+          console.log(`✅ Inserted ${result.affectedRows} products`);
+        }
+        connection.end();
+      });
+    })
+    .on('error', (err) => {
+      console.error('❌ CSV Read Error:', err.message);
+      connection.end();
     });
-    batch.push(rec);
-
-    if (batch.length >= batchSize) {
-      // Flatten [[...],[...]] to single array for mysql2 prepared statement bulk
-      const flat = batch.flat();
-      const placeholders = batch.map(() => `(${fields.map(() => '?').join(',')})`).join(',');
-      await conn.query(
-        `INSERT INTO products (${fields.join(',')}) VALUES ${placeholders}`,
-        flat
-      );
-      total += batch.length;
-      console.log(`Inserted ${total} rows...`);
-      batch.length = 0;
-    }
-  }
-
-  if (batch.length) {
-    const flat = batch.flat();
-    const placeholders = batch.map(() => `(${fields.map(() => '?').join(',')})`).join(',');
-    await conn.query(
-      `INSERT INTO products (${fields.join(',')}) VALUES ${placeholders}`,
-      flat
-    );
-    total += batch.length;
-  }
-
-  console.log(`Done. Inserted ${total} rows.`);
-
-  // Optional indexes (faster queries later)
-  await conn.query('CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku)');
-  await conn.query('CREATE INDEX IF NOT EXISTS idx_products_category ON products(category)');
-
-  // Verification queries
-  const [rc]  = await conn.query('SELECT COUNT(*) AS row_count FROM products');
-  const [peek] = await conn.query('SELECT product_pk, id, name, brand, category, sku, cost, retail_price FROM products LIMIT 10');
-  console.log('Row count:', rc[0].row_count);
-  console.table(peek);
-
-  await conn.end();
-})().catch((err) => {
-  console.error(err);
-  process.exit(1);
 });
