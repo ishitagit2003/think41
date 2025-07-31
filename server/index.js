@@ -1,12 +1,16 @@
-require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
 const productRoutes = require('./routes/productRoutes');
 const db = require('./db/config'); 
+const cors = require('cors');
 
+
+dotenv.config();
 const app = express();
-const PORT = process.env.PORT || 5000;
 
+const PORT = process.env.PORT || 5000;
+app.use(cors());
+app.use(express.json());
 app.use(bodyParser.json());
 app.use('/api/products', productRoutes);
 

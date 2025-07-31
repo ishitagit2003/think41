@@ -1,64 +1,49 @@
 const fs = require('fs');
 const path = require('path');
-const mysql = require('mysql2');
-const dotenv = require('dotenv');
 const csv = require('csv-parser');
+const mysql = require('mysql2/promise');
+const dbConfig = require('../../db/config');
 
-dotenv.config(); // Load .env
+const csvPath = path.join(__dirname, '../../products.csv');
 
-const dbConfig = require('../db/config');
-const connection = mysql.createConnection(dbConfig);
+async function loadCSV() {
+  const connection = await mysql.createConnection(dbConfig);
+  await connection.execute(`CREATE TABLE IF NOT EXISTS products (
+    id INT PRIMARY KEY,
+    cost DECIMAL(10,2),
+    category VARCHAR(255),
+    name VARCHAR(255),
+    brand VARCHAR(255),
+    retail_price DECIMAL(10,2),
+    department VARCHAR(255),
+    sku VARCHAR(255),
+    distribution_center_id INT
+  )`);
 
-// Connect to MySQL
-connection.connect(err => {
-  if (err) {
-    console.error('❌ MySQL connection failed:', err.message);
-    return;
-  }
-  console.log('✅ MySQL connected');
-
-  const results = [];
-  const filePath = path.join(__dirname, '../../products.csv');
-
-  fs.createReadStream(filePath)
+  const rows = [];
+  fs.createReadStream(csvPath)
     .pipe(csv())
-    .on('data', (row) => {
-      results.push([
-        Number(row.id),
-        Number(row.cost),
-        row.category,
-        row.name,
-        row.brand,
-        Number(row.retail_price),
-        row.department,
-        row.sku,
-        row.distribution_center_id
+    .on('data', (data) => {
+      rows.push([
+        data.id,
+        data.cost,
+        data.category,
+        data.name,
+        data.brand,
+        data.retail_price,
+        data.department,
+        data.sku,
+        data.distribution_center_id,
       ]);
     })
-    .on('end', () => {
-      if (results.length === 0) {
-        console.log('❗ No data found in CSV');
-        connection.end();
-        return;
-      }
-
-      const insertQuery = `
-        INSERT INTO products
+    .on('end', async () => {
+      const insertQuery = `INSERT INTO products 
         (id, cost, category, name, brand, retail_price, department, sku, distribution_center_id)
-        VALUES ?
-      `;
-
-      connection.query(insertQuery, [results], (err, result) => {
-        if (err) {
-          console.error('❌ Error inserting products:', err.message);
-        } else {
-          console.log(`✅ Inserted ${result.affectedRows} products`);
-        }
-        connection.end();
-      });
-    })
-    .on('error', (err) => {
-      console.error('❌ CSV Read Error:', err.message);
-      connection.end();
+        VALUES ?`;
+      await connection.query(insertQuery, [rows]);
+      console.log('Products inserted!');
+      await connection.end();
     });
-});
+}
+
+loadCSV();

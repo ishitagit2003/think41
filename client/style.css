@@ -1,0 +1,21 @@
+body {
+  font-family: sans-serif;
+  padding: 20px;
+}
+
+#product-list {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.product-card {
+  border: 1px solid #ccc;
+  padding: 10px;
+  width: 200px;
+  cursor: pointer;
+}
+
+.product-card:hover {
+  background-color: #f2f2f2;
+}
